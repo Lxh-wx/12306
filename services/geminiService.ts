@@ -5,11 +5,50 @@ import { INITIAL_GDP_DATA } from "../constants";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-export const fetchDynamicGDPData = async (): Promise<GDPDataPoint[]> => {
+// Generate deterministic fallback data for years other than 2024 based on growth rates
+// Exporting this to use in App.tsx for instant UI updates while API loads
+export const generateFallbackDataForYear = (year: number): GDPDataPoint[] => {
+  const baseYear = 2024;
+  const yearDiff = year - baseYear;
+
+  // Clone and adjust
+  const adjustedData = INITIAL_GDP_DATA.map(country => {
+    // Simple compound growth formula: P = P0 * (1 + r)^t
+    // We use the country's projected growth rate as the constant rate (simplified for fallback)
+    // We also add a small random variance to make it look dynamic but deterministic
+    const variance = (country.country.length % 5) * 0.1; // deterministic "random" based on name length
+    const rate = (country.growthRate + variance) / 100; 
+    
+    let newGdp = country.gdp * Math.pow(1 + rate, yearDiff);
+    
+    // Clamp minimum GDP to avoid negatives in weird scenarios
+    newGdp = Math.max(10, newGdp);
+
+    return {
+      ...country,
+      gdp: Math.round(newGdp)
+    };
+  });
+
+  // Re-rank
+  adjustedData.sort((a, b) => b.gdp - a.gdp);
+  
+  return adjustedData.map((item, index) => ({
+    ...item,
+    rank: index + 1,
+    color: getColorByRank(index + 1)
+  }));
+};
+
+export const fetchDynamicGDPData = async (year: number = 2024): Promise<GDPDataPoint[]> => {
   try {
+    const prompt = `Return a JSON array of the top 25 countries by GDP (Nominal) for the year ${year}. 
+    If ${year} is in the future, use IMF/World Bank projections. If past, use historical data.
+    For each country include: 'country', 'code' (ISO 3), 'lat', 'lng', 'gdp' (Billions USD), 'growthRate' (%), 'rank'.`;
+
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: "Return a JSON array of the top 25 countries by projected GDP (Nominal) for the year 2024. For each country include: 'country' (name), 'code' (ISO 3 code), 'lat' (approx latitude), 'lng' (approx longitude), 'gdp' (in billions USD, number only), 'growthRate' (percentage number, e.g. 2.5), 'rank' (integer). Ensure precise coordinates.",
+      contents: prompt,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -33,23 +72,23 @@ export const fetchDynamicGDPData = async (): Promise<GDPDataPoint[]> => {
 
     if (response.text) {
       const data = JSON.parse(response.text);
-      // Add colors dynamically based on rank/continent logic or random assignment for variety
       return data.map((d: any) => ({
         ...d,
         color: getColorByRank(d.rank)
       }));
     }
-    return INITIAL_GDP_DATA;
+    
+    console.warn(`Gemini returned no text for year ${year}, using fallback.`);
+    return generateFallbackDataForYear(year);
+
   } catch (error) {
-    // Log as warning to indicate fallback usage rather than critical failure
-    console.warn("Gemini API unavailable or failed, switching to static dataset.");
-    return INITIAL_GDP_DATA;
+    console.warn(`Gemini API unavailable for year ${year}, switching to calculated fallback dataset.`);
+    return generateFallbackDataForYear(year);
   }
 };
 
-export const analyzeCountryEconomy = async (countryName: string, gdp: number, language: Language = 'en'): Promise<AIAnalysis> => {
+export const analyzeCountryEconomy = async (countryName: string, gdp: number, language: Language = 'en', year: number = 2024): Promise<AIAnalysis> => {
   try {
-    // Create a prompt that requests the response in the target language
     const langName = {
       en: 'English',
       zh: 'Chinese (Simplified)',
@@ -57,12 +96,12 @@ export const analyzeCountryEconomy = async (countryName: string, gdp: number, la
       ja: 'Japanese'
     }[language];
 
-    const prompt = `Provide a concise economic analysis for ${countryName} in 2024 (GDP approx $${gdp} Billion). 
+    const prompt = `Provide a concise economic analysis for ${countryName} in ${year} (GDP approx $${gdp} Billion). 
     Respond strictly in ${langName}.
     Return JSON with:
-    1. 'summary': A 2-sentence overview of their current economic state.
+    1. 'summary': A 2-sentence overview of their economic state in ${year}.
     2. 'keySectors': Array of top 3 driving industries.
-    3. 'outlook': A very short prediction for the next year (Bullish/Bearish/Neutral and why).`;
+    3. 'outlook': A very short prediction for the subsequent year.`;
 
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
@@ -95,7 +134,6 @@ export const analyzeCountryEconomy = async (countryName: string, gdp: number, la
   }
 };
 
-// Helper to assign consistent nice colors
 function getColorByRank(rank: number): string {
   const colors = [
     "#ef4444", // Red

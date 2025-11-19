@@ -1,20 +1,28 @@
 
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import GlobeViz from './components/GlobeViz';
 import InfoPanel from './components/InfoPanel';
 import RankingPanel from './components/RankingPanel';
 import ComparisonPanel from './components/ComparisonPanel';
 import LanguageSplash from './components/LanguageSplash';
 import SettingsModal from './components/SettingsModal';
+import YearControls from './components/YearControls';
 import { GDPDataPoint, Language } from './types';
 import { TRANSLATIONS, COUNTRY_TRANSLATIONS } from './constants';
-import { fetchDynamicGDPData } from './services/geminiService';
+import { fetchDynamicGDPData, generateFallbackDataForYear } from './services/geminiService';
 import { Globe as GlobeIcon, Loader2, Settings } from 'lucide-react';
 
 const App: React.FC = () => {
   const [data, setData] = useState<GDPDataPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedCountry, setSelectedCountry] = useState<GDPDataPoint | null>(null);
+  const [year, setYear] = useState(2024);
+  
+  // Data Cache
+  const [dataCache, setDataCache] = useState<Record<number, GDPDataPoint[]>>({});
+  
+  // Debounce timer ref
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // Comparison State
   const [isComparisonOpen, setIsComparisonOpen] = useState(false);
@@ -27,15 +35,50 @@ const App: React.FC = () => {
 
   const t = TRANSLATIONS[language];
 
+  // Fetch data when Year changes with Cache Strategy + Debounce
   useEffect(() => {
-    const initData = async () => {
-      // Fetch data from Gemini or Fallback
-      const gdpData = await fetchDynamicGDPData();
-      setData(gdpData);
-      setLoading(false);
+    const loadData = async () => {
+      // 1. Check Cache First (Instant)
+      if (dataCache[year]) {
+        setData(dataCache[year]);
+        setLoading(false);
+        return;
+      }
+
+      // 2. Show Fallback Data IMMEDIATELY so UI is responsive
+      setLoading(true);
+      const fallbackData = generateFallbackDataForYear(year);
+      setData(fallbackData);
+      // Turn off spinner immediately because we have numbers to show
+      setLoading(false); 
+
+      // 3. Debounce the expensive API call
+      // If user switches years quickly, we cancel previous pending request
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+
+      debounceTimerRef.current = setTimeout(async () => {
+        try {
+          // Only fetch if we are NOT in the locked range
+          if (year < 2026) { 
+             const gdpData = await fetchDynamicGDPData(year);
+             // Update state and cache
+             setData(gdpData);
+             setDataCache(prev => ({ ...prev, [year]: gdpData }));
+          }
+        } catch (e) {
+          console.warn("Background fetch failed, sticking with fallback");
+        }
+      }, 1200); // 1.2 second debounce delay to let user "settle" and reduce API pressure
     };
-    initData();
-  }, []);
+
+    loadData();
+    
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, [year]); // Intentionally not including dataCache in deps to avoid loops
 
   // Translate Data Names
   const localizedData = useMemo(() => {
@@ -48,7 +91,7 @@ const App: React.FC = () => {
     });
   }, [data, language]);
 
-  // Sync selectedCountry when language changes
+  // Sync selectedCountry when language OR year changes
   useEffect(() => {
     if (selectedCountry) {
       const updatedSelected = localizedData.find(d => d.code === selectedCountry.code);
@@ -62,7 +105,7 @@ const App: React.FC = () => {
          setComparisonPreselect(updatedPreselect);
        }
     }
-  }, [localizedData]); // Trigger when data/language changes
+  }, [localizedData]); 
 
   const handleOpenComparison = (country?: GDPDataPoint) => {
     if (country) setComparisonPreselect(country);
@@ -108,8 +151,8 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      {/* Loading State */}
-      {loading && (
+      {/* Loading State - Only for initial load */}
+      {loading && Object.keys(dataCache).length === 0 && (
         <div className="absolute inset-0 flex flex-col items-center justify-center z-50 bg-black/90 backdrop-blur-sm">
           <div className="relative">
             <div className="absolute inset-0 bg-blue-500/20 blur-xl rounded-full animate-pulse"></div>
@@ -120,25 +163,30 @@ const App: React.FC = () => {
       )}
 
       {/* Main Globe Visualization */}
-      {!loading && (
-        <GlobeViz 
-          data={localizedData} 
-          onCountrySelect={setSelectedCountry}
-          selectedCountry={selectedCountry}
-          language={language}
+      <GlobeViz 
+        data={localizedData} 
+        onCountrySelect={setSelectedCountry}
+        selectedCountry={selectedCountry}
+        language={language}
+      />
+
+      {/* Timeline Controls */}
+      {!showLanguageSplash && (
+        <YearControls 
+          year={year} 
+          onChange={setYear} 
+          language={language} 
         />
       )}
 
-      {/* Left Panel: Ranking List (Only visible when not loading) */}
-      {!loading && (
-        <RankingPanel 
-          data={localizedData}
-          selectedCountry={selectedCountry}
-          onSelect={setSelectedCountry}
-          onCompare={() => handleOpenComparison(selectedCountry || undefined)}
-          language={language}
-        />
-      )}
+      {/* Left Panel: Ranking List */}
+      <RankingPanel 
+        data={localizedData}
+        selectedCountry={selectedCountry}
+        onSelect={setSelectedCountry}
+        onCompare={() => handleOpenComparison(selectedCountry || undefined)}
+        language={language}
+      />
 
       {/* Right Panel: Info Details */}
       <div className={`absolute inset-y-0 right-0 z-30 transition-transform duration-500 ease-out ${selectedCountry ? 'translate-x-0' : 'translate-x-full'}`}>
@@ -147,6 +195,7 @@ const App: React.FC = () => {
           onClose={() => setSelectedCountry(null)} 
           onCompare={() => handleOpenComparison(selectedCountry || undefined)}
           language={language}
+          year={year}
         />
       </div>
 

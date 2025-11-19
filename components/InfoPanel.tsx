@@ -3,16 +3,18 @@ import React, { useEffect, useState } from 'react';
 import { GDPDataPoint, AIAnalysis, Language } from '../types';
 import { TRANSLATIONS } from '../constants';
 import { analyzeCountryEconomy } from '../services/geminiService';
-import { ArrowRight, BarChart3, TrendingUp, BrainCircuit, X, Loader2, ArrowRightLeft } from 'lucide-react';
+import TrendChart from './TrendChart';
+import { ArrowRight, BarChart3, TrendingUp, BrainCircuit, X, Loader2, ArrowRightLeft, Calendar } from 'lucide-react';
 
 interface InfoPanelProps {
   country: GDPDataPoint | null;
   onClose: () => void;
   onCompare: () => void;
   language: Language;
+  year: number;
 }
 
-const InfoPanel: React.FC<InfoPanelProps> = ({ country, onClose, onCompare, language }) => {
+const InfoPanel: React.FC<InfoPanelProps> = ({ country, onClose, onCompare, language, year }) => {
   const [analysis, setAnalysis] = useState<AIAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -22,12 +24,12 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ country, onClose, onCompare, lang
     if (country) {
       setLoading(true);
       setAnalysis(null);
-      analyzeCountryEconomy(country.country, country.gdp, language)
+      analyzeCountryEconomy(country.country, country.gdp, language, year)
         .then(data => setAnalysis(data))
         .catch(() => setAnalysis(null))
         .finally(() => setLoading(false));
     }
-  }, [country, language]);
+  }, [country, language, year]); // Re-run when year changes
 
   if (!country) return null;
 
@@ -42,6 +44,8 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ country, onClose, onCompare, lang
             <span className="text-sm font-mono">{country.code}</span>
             <span className="w-1 h-1 bg-white/40 rounded-full"></span>
             <span className="text-sm">{t.globalRank} #{country.rank}</span>
+             <span className="w-1 h-1 bg-white/40 rounded-full"></span>
+            <span className="text-sm flex items-center gap-1 text-blue-300"><Calendar className="w-3 h-3"/> {year}</span>
           </div>
         </div>
         <div className="flex gap-2">
@@ -79,6 +83,16 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ country, onClose, onCompare, lang
             {country.growthRate > 0 ? '+' : ''}{country.growthRate}%
           </div>
         </div>
+      </div>
+
+      {/* Trend Chart */}
+      <div className="mb-8">
+        <TrendChart 
+          countryCode={country.code}
+          currentYear={year}
+          currentGdp={country.gdp}
+          growthRate={country.growthRate}
+        />
       </div>
 
       {/* AI Analysis Section */}
@@ -119,7 +133,7 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ country, onClose, onCompare, lang
 
             {/* Outlook */}
             <div>
-              <h4 className="text-xs uppercase tracking-widest text-white/50 mb-3">{t.outlook}</h4>
+              <h4 className="text-xs uppercase tracking-widest text-white/50 mb-3">{t.outlook} ({year + 1})</h4>
               <div className="flex items-start gap-3 p-4 bg-white/5 rounded-xl border-l-2 border-yellow-500">
                  <ArrowRight className="w-5 h-5 text-yellow-500 mt-0.5 flex-shrink-0" />
                  <p className="text-sm text-white/80">{analysis.outlook}</p>

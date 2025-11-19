@@ -51,4 +51,9 @@ export interface TranslationDictionary {
   settings: string;
   selectLanguage: string;
   continue: string;
+  year: string;
+  timeline: string;
+  projections: string;
+  historical: string;
+  confirmChange: string;
 }
